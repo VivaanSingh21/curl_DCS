@@ -9,8 +9,7 @@
 #     --seed -1 --critic_lr 1e-3 --actor_lr 1e-3 --eval_freq 10000 --batch_size 128 --num_train_steps 1000000 
 
 
-# pip install scikit-image
-# pip install numpy==1.19.5
+
 
 CUDA_VISIBLE_DEVICES=5 python train.py \
     --action_repeat 4 \
