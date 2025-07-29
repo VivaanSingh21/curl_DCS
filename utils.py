@@ -92,11 +92,13 @@ class ReplayBuffer(Dataset):
     
 
     def add(self, obs, action, reward, next_obs, done):
-       
-        np.copyto(self.obses[self.idx], obs)
+        # print(f"Shape of self.obses{self.obses[self.idx].shape}")
+        # print(f"Shape of obs{(obs.astype(np.uint8)).shape}")
+
+        np.copyto(self.obses[self.idx], obs.astype(np.uint8))
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
-        np.copyto(self.next_obses[self.idx], next_obs)
+        np.copyto(self.next_obses[self.idx], next_obs.astype(np.uint8))
         np.copyto(self.not_dones[self.idx], not done)
 
         self.idx = (self.idx + 1) % self.capacity
@@ -210,7 +212,7 @@ class FrameStack(gym.Wrapper):
             shape=((shp[0] * k,) + shp[1:]),
             dtype=env.observation_space.dtype
         )
-        self._max_episode_steps = env._max_episode_steps
+        self._max_episode_steps = env.max_episode_steps
 
     def reset(self):
         obs = self.env.reset()

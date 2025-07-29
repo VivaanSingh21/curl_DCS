@@ -10,7 +10,7 @@ import time
 import json
 import dmc2gym
 import copy
-
+from wrappers import FixedLengthEpisodeWrapper, PixelRenormalization
 import utils
 from logger import Logger
 from video import VideoRecorder
@@ -19,15 +19,24 @@ from curl_sac import CurlSacAgent
 from torchvision import transforms
 
 
+from distracting_control import suite
+
+import wandb
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     # environment
+    parser.add_argument('--image_size_distracting_env', default=100, type=int)
+    parser.add_argument('--static_camera',action='store_true')
+    parser.add_argument('--env_name',type=str,default='Cheetah-run-easy-v1')
+    parser.add_argument('--static_distractors',action='store_true')
     parser.add_argument('--domain_name', default='cheetah')
     parser.add_argument('--task_name', default='run')
     parser.add_argument('--pre_transform_image_size', default=100, type=int)
 
     parser.add_argument('--image_size', default=84, type=int)
-    parser.add_argument('--action_repeat', default=1, type=int)
+    parser.add_argument('--action_repeat', default=4, type=int)
     parser.add_argument('--frame_stack', default=3, type=int)
     # replay buffer
     parser.add_argument('--replay_buffer_capacity', default=100000, type=int)
@@ -72,47 +81,89 @@ def parse_args():
     parser.add_argument('--save_video', default=False, action='store_true')
     parser.add_argument('--save_model', default=False, action='store_true')
     parser.add_argument('--detach_encoder', default=False, action='store_true')
+    parser.add_argument('--n_final_eval_eps',type=int,default=100)
 
     parser.add_argument('--log_interval', default=100, type=int)
     args = parser.parse_args()
+    args.ep_len = 1000/args.action_repeat
     return args
 
 
-def evaluate(env, agent, video, num_episodes, L, step, args):
+def evaluate(env, agent, video, num_episodes, L, step, args, final_eval = False):
     all_ep_rewards = []
 
-    def run_eval_loop(sample_stochastically=True):
-        start_time = time.time()
-        prefix = 'stochastic_' if sample_stochastically else ''
-        for i in range(num_episodes):
-            obs = env.reset()
-            video.init(enabled=(i == 0))
-            done = False
-            episode_reward = 0
-            while not done:
-                # center crop image
-                if args.encoder_type == 'pixel':
-                    obs = utils.center_crop_image(obs,args.image_size)
-                with utils.eval_mode(agent):
-                    if sample_stochastically:
-                        action = agent.sample_action(obs)
-                    else:
-                        action = agent.select_action(obs)
-                obs, reward, done, _ = env.step(action)
-                video.record(env)
-                episode_reward += reward
+    def run_eval_loop(sample_stochastically=True, final_eval= False):
+        if not final_eval:
 
-            video.save('%d.mp4' % step)
-            L.log('eval/' + prefix + 'episode_reward', episode_reward, step)
-            all_ep_rewards.append(episode_reward)
-        
-        L.log('eval/' + prefix + 'eval_time', time.time()-start_time , step)
-        mean_ep_reward = np.mean(all_ep_rewards)
-        best_ep_reward = np.max(all_ep_rewards)
-        L.log('eval/' + prefix + 'mean_episode_reward', mean_ep_reward, step)
-        L.log('eval/' + prefix + 'best_episode_reward', best_ep_reward, step)
+            start_time = time.time()
+            prefix = 'stochastic_' if sample_stochastically else ''
+            for i in range(num_episodes):
+                obs = env.reset()
+                video.init(enabled=(i == 0))
+                done = False
+                episode_reward = 0
+                while not done:
+                    # center crop image
+                    if args.encoder_type == 'pixel':
+                        obs = utils.center_crop_image(obs,args.image_size)
+                    with utils.eval_mode(agent):
+                        if sample_stochastically:
+                            action = agent.sample_action(obs)
+                        else:
+                            action = agent.select_action(obs)
+                    obs, reward, done, _ = env.step(action)
+                    video.record(env)
+                    episode_reward += reward
 
-    run_eval_loop(sample_stochastically=False)
+                video.save('%d.mp4' % step)
+                L.log('eval/' + prefix + 'episode_reward', episode_reward, step)
+                wandb.log({'eval/' + prefix + 'episode_reward': episode_reward}, step=step)
+                all_ep_rewards.append(episode_reward)
+            
+            L.log('eval/' + prefix + 'eval_time', time.time()-start_time , step)
+            wandb.log({'eval/' + prefix + 'eval_time': time.time()-start_time}, step=step)
+            mean_ep_reward = np.mean(all_ep_rewards)
+            best_ep_reward = np.max(all_ep_rewards)
+            L.log('eval/' + prefix + 'mean_episode_reward', mean_ep_reward, step)
+            wandb.log({'eval/' + prefix + 'mean_episode_reward': mean_ep_reward}, step=step)
+            L.log('eval/' + prefix + 'best_episode_reward', best_ep_reward, step)
+            wandb.log({'eval/' + prefix + 'best_episode_reward': best_ep_reward}, step=step)
+        else:
+            start_time = time.time()
+            prefix = 'stochastic_' if sample_stochastically else ''
+            for i in range(num_episodes):
+                obs = env.reset()
+                video.init(enabled=(i == 0))
+                done = False
+                episode_reward = 0
+                while not done:
+                    # center crop image
+                    if args.encoder_type == 'pixel':
+                        obs = utils.center_crop_image(obs,args.image_size)
+                    with utils.eval_mode(agent):
+                        if sample_stochastically:
+                            action = agent.sample_action(obs)
+                        else:
+                            action = agent.select_action(obs)
+                    obs, reward, done, _ = env.step(action)
+                    video.record(env)
+                    episode_reward += reward
+
+                video.save('%d.mp4' % step)
+                L.log('Final eval/' + prefix + 'episode_reward', episode_reward, step)
+                wandb.log({'Final eval/' + prefix + 'episode_reward': episode_reward}, step=step)
+                all_ep_rewards.append(episode_reward)
+            
+            L.log('Final eval/' + prefix + 'eval_time', time.time()-start_time , step)
+            wandb.log({'Final eval/' + prefix + 'eval_time': time.time()-start_time}, step=step)
+            mean_ep_reward = np.mean(all_ep_rewards)
+            best_ep_reward = np.max(all_ep_rewards)
+            L.log('Final eval/' + prefix + 'mean_episode_reward', mean_ep_reward, step)
+            wandb.log({'Final eval/' + prefix + 'mean_episode_reward': mean_ep_reward}, step=step)
+            L.log('Final eval/' + prefix + 'best_episode_reward', best_ep_reward, step)
+            wandb.log({'Final eval/' + prefix + 'best_episode_reward': best_ep_reward}, step=step)
+
+    run_eval_loop(sample_stochastically=False, final_eval= final_eval)
     L.dump(step)
 
 
@@ -155,18 +206,55 @@ def main():
     if args.seed == -1: 
         args.__dict__["seed"] = np.random.randint(1,1000000)
     utils.set_seed_everywhere(args.seed)
-    env = dmc2gym.make(
-        domain_name=args.domain_name,
-        task_name=args.task_name,
-        seed=args.seed,
-        visualize_reward=False,
-        from_pixels=(args.encoder_type == 'pixel'),
-        height=args.pre_transform_image_size,
-        width=args.pre_transform_image_size,
-        frame_skip=args.action_repeat
-    )
+    print(args.encoder_type)
+
+    wandb.login(key="")
+    wandb.init(project='CURL DCS', config=vars(args), name=f"{args.domain_name}-{args.task_name}-seed{args.seed}")
+    # env = dmc2gym.make(
+    #     domain_name=args.domain_name,
+    #     task_name=args.task_name,
+    #     seed=args.seed,
+    #     visualize_reward=False,
+    #     from_pixels=(args.encoder_type == 'pixel'),
+    #     height=args.pre_transform_image_size,
+    #     width=args.pre_transform_image_size,
+    #     frame_skip=args.action_repeat
+    # )
+    # env.max_episode_steps = args.ep_len
+
+
+
+    def make_distracting_env(args,val=False):
+	# ipdb.set_trace()
+        davis_path = '/home/biorobotics/Downloads/DAVIS/JPEGImages/480p/'
+        suite.BG_DATA_PATH=davis_path 
+        dynamic = not args.static_distractors
+        
+        partition='val' if val else 'train'
+
+        if args.static_camera:
+            env = gym.make(args.env_name,from_pixels=True,dynamic=dynamic,visualize_reward=False,height=args.image_size_distracting_env,width=args.image_size_distracting_env,frame_skip=args.action_repeat,distraction_types=('background','color'),background_dataset_videos=partition)
+        else:
+            # ipdb.set_trace()
+            env = gym.make(args.env_name,from_pixels=True,dynamic=dynamic,visualize_reward=False,height=args.image_size_distracting_env,width=args.image_size_distracting_env,frame_skip=args.action_repeat,background_dataset_videos=partition)
+        # if hasattr(env, 'observation_space') and env.observation_space.dtype == np.uint8:
+        #     env.observation_space = gym.spaces.Box(
+        #         low=0,
+        #         high=255,
+        #         shape=env.observation_space.shape,
+        #         dtype=np.uint8
+        #     )
+        env.max_episode_steps = args.ep_len
+
+
+        env = FixedLengthEpisodeWrapper(env,args.ep_len)
+        env = PixelRenormalization(env)
+
+        return env
+
+    env = make_distracting_env(args)
  
-    env.seed(args.seed)
+    # env.seed(args.seed)
 
     # stack several consecutive frames together
     if args.encoder_type == 'pixel':
@@ -187,8 +275,8 @@ def main():
 
     video = VideoRecorder(video_dir if args.save_video else None)
 
-    with open(os.path.join(args.work_dir, 'args.json'), 'w') as f:
-        json.dump(vars(args), f, sort_keys=True, indent=4)
+    # with open(os.path.join(args.work_dir, 'args.json'), 'w') as f:
+    #     json.dump(vars(args), f, sort_keys=True, indent=4)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -201,6 +289,8 @@ def main():
         obs_shape = env.observation_space.shape
         pre_aug_obs_shape = obs_shape
 
+
+    # print(f'obs_shape is {(pre_aug_obs_shape)}')
     replay_buffer = utils.ReplayBuffer(
         obs_shape=pre_aug_obs_shape,
         action_shape=action_shape,
@@ -227,6 +317,7 @@ def main():
 
         if step % args.eval_freq == 0:
             L.log('eval/episode', episode, step)
+            wandb.log({'eval/episode': episode}, step=step)
             evaluate(env, agent, video, args.num_eval_episodes, L, step,args)
             if args.save_model:
                 agent.save_curl(model_dir, step)
@@ -241,14 +332,18 @@ def main():
                 start_time = time.time()
             if step % args.log_interval == 0:
                 L.log('train/episode_reward', episode_reward, step)
+                wandb.log({'train/episode_reward': episode_reward}, step=step)
 
             obs = env.reset()
+            # # print(f"Printing observation{obs}")
+            # # print(f"Printing observation shape {obs.shape}")
             done = False
             episode_reward = 0
             episode_step = 0
             episode += 1
             if step % args.log_interval == 0:
                 L.log('train/episode', episode, step)
+                wandb.log({'train/episode': episode}, step=step)
 
         # sample action for data collection
         if step < args.init_steps:
@@ -270,13 +365,20 @@ def main():
             done
         )
         episode_reward += reward
+        # print(obs.shape)
+        # print()
+        # print(obs.dtype)
         replay_buffer.add(obs, action, reward, next_obs, done_bool)
 
         obs = next_obs
         episode_step += 1
+
+    print("FINAL EVAL!!!")
+    evaluate(env, agent, video, args.final_eval_eps, L, 10,args, final_eval= True)
 
 
 if __name__ == '__main__':
     torch.multiprocessing.set_start_method('spawn')
 
     main()
+
