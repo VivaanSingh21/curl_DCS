@@ -11,7 +11,7 @@
 
 
 
-CUDA_VISIBLE_DEVICES=5 python train.py \
+CUDA_VISIBLE_DEVICES=0,1 python train.py \
     --action_repeat 4 \
     --save_tb --pre_transform_image_size 100 --image_size 84 \
     --agent curl_sac --frame_stack 3 \

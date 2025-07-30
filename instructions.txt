@@ -124,3 +124,5 @@ cd ~/gym-distracting-control/
 pip install -e .
 pip install gym==0.26.2             (It's either this or 0.20.0 - I'm not sure)
 pip install wandb==0.12.21
+
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
